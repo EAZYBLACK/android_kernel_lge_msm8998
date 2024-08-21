@@ -19,6 +19,10 @@
 #include "lge_mdss_dsi_panel.h"
 #include <linux/delay.h>
 
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_READER_MODE)
+#include "lge/lge_reader_mode.h"
+#endif
+
 #if defined(CONFIG_LGE_DISPLAY_CONTROL)
 #include "lge_display_control.h"
 #if defined(CONFIG_LGE_DISPLAY_COMFORT_MODE)
@@ -45,7 +49,15 @@ char *lge_blmap_name[] = {
 
 #if defined(CONFIG_LGE_DISPLAY_COMMON)
 extern int panel_not_connected;
+int detect_factory_cable(void);
 #endif /* CONFIG_LGE_DISPLAY_COMMON*/
+
+#if defined(CONFIG_LGE_LCD_TUNING)
+extern int tun_lcd[128];
+extern char read_cmd[128];
+extern int reg_num;
+int cmd_num;
+#endif
 
 extern int mdss_dsi_parse_dcs_cmds(struct device_node *np,
 		struct dsi_panel_cmds *pcmds, char *cmd_key, char *link_key);
@@ -164,7 +176,11 @@ void lge_mdss_dsi_bist_release(struct mdss_dsi_ctrl_pdata *ctrl)
 }
 #endif
 
+#ifdef CONFIG_ARCH_MSM8996
+char lge_dcs_cmd[1] = {0xD8}; /* DTYPE_DCS_READ */
+#else
 char lge_dcs_cmd[2] = {0x00, 0x00}; /* DTYPE_DCS_READ */
+#endif
 struct dsi_cmd_desc lge_dcs_read_cmd = {
 	{DTYPE_DCS_READ, 1, 0, 1, 1, sizeof(lge_dcs_cmd)},
 	lge_dcs_cmd
@@ -228,6 +244,390 @@ int lge_mdss_dsi_panel_cmd_read(char cmd0, int cnt, char* ret_buf)
 
 	return ret;
 }
+
+int lge_is_valid_U2_FTRIM_reg(void)
+{
+	int ret = 0;
+	char ret_buf[4] = {0x0};
+	char cmd_addr[1] = {0xC7};
+
+	if(pdata_base->panel_info.panel_power_state == 0){
+		pr_err("%s: Cannot read U2 FTRIM reg because panel is off state.\n", __func__);
+		return -ENODEV;
+	}
+
+	lge_mdss_dsi_panel_cmd_read(cmd_addr[0], 4, ret_buf);
+
+	if (ret_buf[3] & BIT(6)) {
+		ret = 1;
+	}
+
+	return ret;
+}
+EXPORT_SYMBOL(lge_is_valid_U2_FTRIM_reg);
+
+#if defined(CONFIG_LGE_DISPLAY_MFTS_DET_SUPPORTED) && !defined(CONFIG_LGE_DISPLAY_DYN_DSI_MODE_SWITCH)
+static int mfts_video_cnt;
+int lge_set_validate_lcd_reg(void)
+{
+	int i = 0;
+	int ret = 0;
+	int cnt = 13;
+	char ret_buf[13] = {0x0};
+	char cmd_addr[1] = {0xC7};
+	struct mdss_dsi_ctrl_pdata *ctrl;
+
+	ctrl = container_of(pdata_base, struct mdss_dsi_ctrl_pdata,
+						panel_data);
+	if(pdata_base->panel_info.panel_power_state == 0){
+		pr_err("%s: Cannot check TRIM reg because panel is off state.\n", __func__);
+		return -ENODEV;
+	}
+
+	lge_mdss_dsi_panel_cmd_read(cmd_addr[0], cnt, ret_buf);
+
+	if(pdata_base->panel_info.is_validate_lcd == 1) //for MFTS mode
+	{
+		memcpy(&(ctrl->screen_cmds_102v.cmds[0].payload[1]), ret_buf, cnt);
+
+		pr_info("trim reg before writing mode %d : ", pdata_base->panel_info.is_validate_lcd);
+		for ( i = 0; i < cnt + 1; i++) {
+			pr_info("0x%x ", ctrl->screen_cmds_102v.cmds[0].payload[i]);
+		}
+		pr_info("\n");
+
+		//1.02V
+		ctrl->screen_cmds_102v.cmds[0].payload[9] = 0x00;
+
+		mdss_dsi_panel_cmds_send(ctrl, &ctrl->screen_cmds_102v, CMD_REQ_COMMIT);
+		lge_mdss_dsi_panel_cmd_read(cmd_addr[0], cnt, ret_buf);
+
+		memcpy(&(ctrl->screen_cmds_102v.cmds[0].payload[1]), ret_buf, cnt);
+
+		pr_info("trim reg after writing mode %d : ", pdata_base->panel_info.is_validate_lcd);
+		for ( i = 0; i < cnt + 1; i++) {
+			pr_info("0x%x ", ctrl->screen_cmds_102v.cmds[0].payload[i]);
+		}
+		pr_info("\n");
+	} else if(pdata_base->panel_info.is_validate_lcd == 2) { //for MFTS mode
+		memcpy(&(ctrl->screen_cmds_129v.cmds[0].payload[1]), ret_buf, cnt);
+
+		pr_info("trim reg before writing mode %d : ", pdata_base->panel_info.is_validate_lcd);
+		for ( i = 0; i < cnt + 1; i++) {
+			pr_info("0x%x ", ctrl->screen_cmds_129v.cmds[0].payload[i]);
+		}
+		pr_info("\n");
+
+		//1.29V
+		ctrl->screen_cmds_129v.cmds[0].payload[9] += 0x22;
+
+		mdss_dsi_panel_cmds_send(ctrl, &ctrl->screen_cmds_129v, CMD_REQ_COMMIT);
+		lge_mdss_dsi_panel_cmd_read(cmd_addr[0], cnt, ret_buf);
+
+		memcpy(&(ctrl->screen_cmds_129v.cmds[0].payload[1]), ret_buf, cnt);
+
+		pr_info("trim reg after writing mode %d : ", pdata_base->panel_info.is_validate_lcd);
+		for ( i = 0; i < cnt + 1; i++) {
+			pr_info("0x%x ", ctrl->screen_cmds_129v.cmds[0].payload[i]);
+		}
+		pr_info("\n");
+	}  else if(pdata_base->panel_info.is_validate_lcd == 3) { //for MFTS mode
+		memcpy(&(ctrl->screen_cmds_132v.cmds[0].payload[1]), ret_buf, cnt);
+
+		pr_info("trim reg before writing mode %d : ", pdata_base->panel_info.is_validate_lcd);
+		for ( i = 0; i < cnt + 1; i++) {
+			pr_info("0x%x ", ctrl->screen_cmds_132v.cmds[0].payload[i]);
+		}
+		pr_info("\n");
+		switch(mfts_video_cnt){
+			case 0:
+				ctrl->cam_cmds.cmds[0].payload[1] = 0x99;
+				mdss_dsi_panel_cmds_send(ctrl, &ctrl->cam_cmds, CMD_REQ_COMMIT);
+				pr_info("mfts_video_cnt : %d\n", mfts_video_cnt);
+				mfts_video_cnt++;
+				break;
+			case 1:
+				ctrl->cam_cmds.cmds[0].payload[1] = 0x9a;
+				mdss_dsi_panel_cmds_send(ctrl, &ctrl->cam_cmds, CMD_REQ_COMMIT);
+				pr_info("mfts_video_cnt : %d\n", mfts_video_cnt);
+				mfts_video_cnt++;
+				break;
+			case 2:
+				ctrl->cam_cmds.cmds[0].payload[1] = 0x9b;
+				mdss_dsi_panel_cmds_send(ctrl, &ctrl->cam_cmds, CMD_REQ_COMMIT);
+				pr_info("mfts_video_cnt : %d\n", mfts_video_cnt);
+				break;
+			default:
+				break;
+		}
+		//1.32V
+		ctrl->screen_cmds_132v.cmds[0].payload[9] += 0x33;
+		mdss_dsi_panel_cmds_send(ctrl, &ctrl->screen_cmds_132v, CMD_REQ_COMMIT);
+		lge_mdss_dsi_panel_cmd_read(cmd_addr[0], cnt, ret_buf);
+
+		memcpy(&(ctrl->screen_cmds_132v.cmds[0].payload[1]), ret_buf, cnt);
+
+		pr_info("trim reg after writing mode %d : ", pdata_base->panel_info.is_validate_lcd);
+		for ( i = 0; i < cnt + 1; i++) {
+			pr_info("0x%x ", ctrl->screen_cmds_132v.cmds[0].payload[i]);
+		}
+		pr_info("\n");
+	} else {
+		memcpy(&(ctrl->trimming_cmds.cmds[0].payload[1]), ret_buf, cnt);
+
+		pr_info("trim reg before writing mode %d : ", pdata_base->panel_info.is_validate_lcd);
+		for ( i = 0; i < cnt + 1; i++) {
+			pr_info("0x%x ", ctrl->trimming_cmds.cmds[0].payload[i]);
+		}
+		pr_info("\n");
+
+		/* We don't need to set vdds to 1.29V anymore if this video test isn't working.
+		//vdds 1.29V
+		ctrl->trimming_cmds.cmds[0].payload[9] += 0x22;
+		mdss_dsi_panel_cmds_send(ctrl, &ctrl->trimming_cmds, CMD_REQ_COMMIT);
+		*/
+		lge_mdss_dsi_panel_cmd_read(cmd_addr[0], cnt, ret_buf);
+
+		memcpy(&(ctrl->trimming_cmds.cmds[0].payload[1]), ret_buf, cnt);
+
+		pr_info("trim reg after writing mode %d : ", pdata_base->panel_info.is_validate_lcd);
+		for ( i = 0; i < cnt + 1; i++) {
+			pr_info("0x%x ", ctrl->trimming_cmds.cmds[0].payload[i]);
+		}
+		mfts_video_cnt = 0;
+		pr_info("\n");
+	}
+
+	return ret;
+}
+EXPORT_SYMBOL(lge_set_validate_lcd_reg);
+
+int lge_set_validate_lcd_cam(int mode)
+{
+	int i = 0;
+	int ret = 0;
+	int cnt = 13;
+	char ret_buf[13] = {0x0};
+	char cmd_addr[1] = {0xC7};
+	struct mdss_dsi_ctrl_pdata *ctrl;
+
+	ctrl = container_of(pdata_base, struct mdss_dsi_ctrl_pdata,
+						panel_data);
+	if(pdata_base->panel_info.panel_power_state == 0){
+		pr_err("%s: Cannot check TRIM reg because panel is off state.\n", __func__);
+		return -ENODEV;
+	}
+
+	lge_force_mdss_dsi_panel_cmd_read(cmd_addr[0], cnt, ret_buf);
+
+	if(mode == 1) //for AAT cam Test
+	{
+		memcpy(&(ctrl->trimming_cmds.cmds[0].payload[1]), ret_buf, cnt);
+
+		pr_info("trim reg before writing mode %d : ", mode);
+		for ( i = 0; i < cnt + 1; i++) {
+			pr_info("0x%x ", ctrl->trimming_cmds.cmds[0].payload[i]);
+		}
+		pr_info("\n");
+
+		//vdds 1.32V
+		ctrl->trimming_cmds.cmds[0].payload[9] += 0x11;
+		mdss_dsi_panel_cmds_send(ctrl, &ctrl->trimming_cmds, CMD_REQ_COMMIT);
+
+		//cam cmds
+		ctrl->cam_cmds.cmds[0].payload[1] = 0x9A;
+		mdss_dsi_panel_cmds_send(ctrl, &ctrl->cam_cmds, CMD_REQ_COMMIT);
+
+		pr_info("cam reg writing mode : ");
+		for ( i = 0; i < 7 + 1; i++) {
+			pr_info("0x%x ", ctrl->cam_cmds.cmds[0].payload[i]);
+		}
+		pr_info("\n");
+
+		lge_force_mdss_dsi_panel_cmd_read(cmd_addr[0], cnt, ret_buf);
+
+		memcpy(&(ctrl->trimming_cmds.cmds[0].payload[1]), ret_buf, cnt);
+
+		pr_info("trim reg after writing mode %d : ", mode);
+		for ( i = 0; i < cnt + 1; i++) {
+			pr_info("0x%x ", ctrl->trimming_cmds.cmds[0].payload[i]);
+		}
+		pr_info("\n");
+	} else { // recovery
+		memcpy(&(ctrl->trimming_cmds.cmds[0].payload[1]), ret_buf, cnt);
+
+		pr_info("trim reg before writing mode %d : ", mode);
+		for ( i = 0; i < cnt + 1; i++) {
+			pr_info("0x%x ", ctrl->trimming_cmds.cmds[0].payload[i]);
+		}
+		pr_info("\n");
+
+		//vdds 1.32V
+		ctrl->trimming_cmds.cmds[0].payload[9] -= 0x11;
+		mdss_dsi_panel_cmds_send(ctrl, &ctrl->trimming_cmds, CMD_REQ_COMMIT);
+
+		//cam time
+		ctrl->cam_cmds.cmds[0].payload[1] = 0x98;
+		mdss_dsi_panel_cmds_send(ctrl, &ctrl->cam_cmds, CMD_REQ_COMMIT);
+
+		pr_info("hold time reg writing mode : ");
+		for ( i = 0; i < 7 + 1; i++) {
+			pr_info("0x%x ", ctrl->cam_cmds.cmds[0].payload[i]);
+		}
+		pr_info("\n");
+
+		lge_force_mdss_dsi_panel_cmd_read(cmd_addr[0], cnt, ret_buf);
+
+		memcpy(&(ctrl->trimming_cmds.cmds[0].payload[1]), ret_buf, cnt);
+
+		pr_info("trim reg after writing mode %d : ", mode);
+		for ( i = 0; i < cnt + 1; i++) {
+			pr_info("0x%x ", ctrl->trimming_cmds.cmds[0].payload[i]);
+		}
+		pr_info("\n");
+	}
+	return ret;
+}
+EXPORT_SYMBOL(lge_set_validate_lcd_cam);
+#endif
+
+#if defined(CONFIG_LGE_DISPLAY_AOD_WITH_MIPI)
+char lge_dcs_cmd_watch[1] = {0xD8}; /* DTYPE_DCS_READ */
+struct dsi_cmd_desc lge_dcs_read_cmd_watch = {
+	{DTYPE_DCS_READ, 1, 0, 1, 5, sizeof(lge_dcs_cmd_watch)},
+	lge_dcs_cmd_watch,
+};
+void lge_watch_mdss_dsi_panel_cmd_read(struct mdss_dsi_ctrl_pdata *ctrl,
+		char cmd0, int cnt, char* ret_buf)
+{
+	struct dcs_cmd_req cmdreq;
+	char rx_buf[128] = {0x0};
+
+	lge_dcs_cmd_watch[0] = cmd0;
+	memset(&cmdreq, 0, sizeof(cmdreq));
+	cmdreq.cmds = &lge_dcs_read_cmd_watch;
+	cmdreq.cmds_cnt = 1;
+	cmdreq.flags = CMD_REQ_RX | CMD_REQ_COMMIT;
+	cmdreq.rlen = cnt;
+	cmdreq.cb = NULL;
+	cmdreq.rbuf = rx_buf;
+
+	if (ctrl->status_cmds.link_state == DSI_LP_MODE)
+		cmdreq.flags |= CMD_REQ_LP_MODE;
+	else if (ctrl->status_cmds.link_state == DSI_HS_MODE)
+		cmdreq.flags |= CMD_REQ_HS_MODE;
+
+	mdelay(1);
+
+	mdss_dsi_cmdlist_put(ctrl, &cmdreq);
+
+	//for(i=0;i<cnt;i++)
+	//	pr_info("[Display]Reg[0x%x],buf[%d]=0x%x,mode[%d]\n",cmd0, i, rx_buf[i], ctrl->status_cmds.link_state);
+
+	memcpy(ret_buf, rx_buf, cnt);
+}
+#endif
+
+#if defined(CONFIG_LGE_LCD_TUNING)
+int find_lcd_cmd(void)
+{
+	struct mdss_dsi_ctrl_pdata *ctrl = NULL;
+	int i,j;
+	char cmd[128]={0, };
+	memset(read_cmd,0,128*sizeof(char));
+	pr_info("reg_num=%x",reg_num);
+	if(pdata_base == NULL) {
+		pr_err("%s: Invalid input data\n", __func__);
+		return -EINVAL;
+	}
+
+	ctrl =  container_of(pdata_base, struct mdss_dsi_ctrl_pdata,
+			panel_data);
+	for(i=0;i<ctrl->on_cmds.cmd_cnt;i++)
+	{
+		pr_info("%s:cmd_cnt(find_lcd_cmd)[%d]=%x",__func__,i,ctrl->on_cmds.cmds[i].payload[0]);
+		if(ctrl->on_cmds.cmds[i].payload[0]==reg_num)
+		{
+			for(j=0;j<ctrl->on_cmds.cmds[i].dchdr.dlen;j++)
+			{
+				cmd[j] = ctrl->on_cmds.cmds[i].payload[j];
+			}
+			memcpy(read_cmd,cmd,128*sizeof(char));
+			cmd_num=ctrl->on_cmds.cmds[i].dchdr.dlen;
+			return cmd_num;
+		}
+	}
+	return 0;
+}
+void put_lcd_cmd(void)
+{
+	struct mdss_dsi_ctrl_pdata *ctrl = NULL;
+	int i,j;
+	pr_info("reg_num=%x",reg_num);
+	if(pdata_base == NULL) {
+		pr_err("%s: Invalid input data\n", __func__);
+		return;
+	}
+
+	ctrl =  container_of(pdata_base, struct mdss_dsi_ctrl_pdata,
+			panel_data);
+	for(i=0;i<ctrl->on_cmds.cmd_cnt;i++)
+	{
+		pr_info("%s:cmd_cnt[%d]=%x",__func__,i,ctrl->on_cmds.cmds[i].payload[0]);
+		if(ctrl->on_cmds.cmds[i].payload[0]==reg_num)
+		{
+			for(j=1;j<ctrl->on_cmds.cmds[i].dchdr.dlen;j++)
+			{
+				ctrl->on_cmds.cmds[i].payload[j]=tun_lcd[j];
+				pr_info("%s: cmds[%d].payload[%d]: %x",__func__,i,j,ctrl->on_cmds.cmds[i].payload[j]);
+			}
+			//mdss_dsi_panel_cmds_send(ctrl, &ctrl->on_cmds, CMD_REQ_COMMIT);
+		}
+	}
+}
+
+int get_backlight_map_size(int *bl_size)
+{
+	int ret = 0;
+#if defined(CONFIG_LGE_DISPLAY_COMMON)
+	if (pdata_base) {
+		*bl_size = pdata_base->panel_info.blmap_size;
+		pr_info("Current bl map size : %d\n", *bl_size);
+	}
+#else
+	ret = -1;
+#endif
+	return ret;
+}
+
+int get_backlight_map(int *bl_map)
+{
+	int ret = 0;
+#if defined(CONFIG_LGE_DISPLAY_COMMON)
+	if (pdata_base) {
+		memcpy(bl_map, pdata_base->panel_info.blmap, sizeof(int) * pdata_base->panel_info.blmap_size);
+	}
+#else
+	ret = -1;
+#endif
+	return ret;
+}
+int set_backlight_map(int bl_size, int *bl_map)
+{
+	int ret = 0;
+#if defined(CONFIG_LGE_DISPLAY_COMMON)
+	if (pdata_base) {
+		pdata_base->panel_info.blmap_size = bl_size;
+		memcpy(pdata_base->panel_info.blmap, bl_map, sizeof(int) * bl_size);
+		pr_info("BL map updated with size %d\n", bl_size);
+	}
+#else
+	ret = -1;
+#endif
+	return ret;
+}
+
+#endif
 
 char *lge_get_blmapname(enum lge_bl_map_type  blmaptype)
 {
